@@ -38,6 +38,8 @@ python mind_server.py
 
 Then open <http://127.0.0.1:8080>.
 
+For phone operation and the authenticated Termux bridge, see [`docs/REAL_WORLD_USE.md`](docs/REAL_WORLD_USE.md) and [`docs/TERMUX_BRIDGE.md`](docs/TERMUX_BRIDGE.md).
+
 ## Security and network boundary
 
 The repository does not expose an MCP endpoint or a remote command-execution bridge. A Termux connection should be implemented as a narrow, authenticated IPC adapter around the `Bridge` API — not by exposing Python evaluation, shell commands, arbitrary file access, or the full `AllMynd` object.

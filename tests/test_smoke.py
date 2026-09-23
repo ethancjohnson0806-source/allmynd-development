@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from allmynd.bridge import Bridge
+from allmynd.mind import AllMynd
 from semantic_engine.engine import SemanticEngine
 
 
@@ -23,6 +24,13 @@ class ImportAndPipelineTests(unittest.TestCase):
             self.assertIsInstance(response, str)
             bridge.save()
             self.assertTrue(Path(directory, "state.json").exists())
+
+    def test_final_message_handles_expanded_quantum_body(self):
+        mind = AllMynd()
+        mind.generate_response("hello, are you there?")
+        self.assertGreaterEqual(mind.quantum_body.dim, 128)
+        mind.write_final_message()
+        self.assertTrue((mind.state[120:128] != 0).any())
 
 
 if __name__ == "__main__":

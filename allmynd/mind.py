@@ -4467,6 +4467,16 @@ class AllMynd:
         # outcomes maps to exactly one of the 8 marker slots.
         raw = self.quantum_body.state.astype(np.complex64)
         combined = ((raw.real + raw.imag) / math.sqrt(2)).astype(np.float32)
+        if combined.size != DIM:
+            # FIX (fix_final_message_fold.py): quantum_body.state is now
+            # self.quantum_body.dim-long (4096 at 12 qubits post-expansion),
+            # not always exactly DIM (128) -- the assumption the "Bug fix,
+            # take 2" comment above relied on when the body was 7 qubits.
+            # Fold down first, same block-sum pattern project_to_ternary()
+            # and phase_field.absorb() already use, before the existing
+            # 8-bucket fold below. Confirmed real on-device crash without
+            # this: "cannot reshape array of size 4096 into shape (8,16)".
+            combined = combined.reshape(DIM, combined.size // DIM).sum(axis=1)
         folded = combined.reshape(8, DIM // 8).sum(axis=1)
         fingerprint = folded * 0.3
         self.state[120:128] = fingerprint

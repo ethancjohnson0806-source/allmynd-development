@@ -1,20 +1,20 @@
-# ALL MY'ND Development
+# ALL MY'ND
 
-This repository is the **active development workspace** for ALL MY'ND (also called Alien Mind in the historical lineage). It is a research and engineering codebase, not a finished autonomous agent or a production-secure network service.
+A rule-based generative mind that runs entirely offline on a phone.
 
-## What is included
+## What it is
 
-The archive preserves the split project as received:
+No LLM underneath. No cloud. No API calls. ALL MY'ND represents its internal state as a 128-dimensional ternary field — a sparse vector of `{-1, 0, 1}` — which a small quantum body (a real statevector simulator, 12 qubits, vendored from [Legitimate Quantum Engine](https://github.com/ethancjohnson0806-source/Legitimate-Quantum-Engine)) continuously perturbs through mood, tension, and decoherence.
 
-- `allmynd/` contains the identity-facing runtime, bridge, and historical one-shot fix scripts.
-- `semantic_engine/` contains the text, vector, ternary, settling, and optional quantum subsystems.
-- `run.py` provides a terminal interface.
-- `mind_server.py` provides a small local browser interface.
-- `quantum_state.py` is retained as a top-level compatibility module.
-- semantic_engine/lqe_core/statevector.py is vendored from Legitimate-Quantum-Engine (MIT).
-- `ALLMYND_CHANGELOG.md` is the historical handoff and audit record.
+Generation is word-by-word candidate selection scored against that field. It is not next-token prediction: the field settles first, then words are picked that resonate with where it settled. Memory is layered: a short-term `Window`, a four-timescale `NestedMemory`, and a `LandmarkMap` that charts regions the field has genuinely revisited. A `MoralCompass` self-calibrates its values from its own choices rather than holding fixed weights. `GhostMesh` allows separate instances to discover each other on a LAN and exchange resonance data.
 
-The code is intentionally preserved rather than rewritten during repository creation. Existing behavior and open issues must be verified against the source before changes are made.
+The design rule, stated in the engine's own docstring: **the math layer never knows what it wants. Only the mind layer does.** Silence is a valid response when the field has nothing to say.
+
+## Status
+
+This is a research artifact, not a finished agent.
+
+It runs. It has documented bugs. The changelog records both verified fixes and open findings, and must not be read as a release checklist. Passing the smoke tests means the package imports and its basic semantic pipeline executes — it does **not** establish scientific validity, consciousness, general intelligence, or production readiness.
 
 ## Quick start
 
@@ -36,22 +36,11 @@ For the local browser interface:
 python mind_server.py
 ```
 
-Then open <http://127.0.0.1:8080>. The server binds to localhost by default. Do not use `--host 0.0.0.0` on an untrusted network without adding authentication, authorization, transport security, request limits, and an explicit threat model.
+Then open <http://127.0.0.1:8080>.
 
-## Development checks
+## Security and network boundary
 
-Run the repository checks from the project root:
-
-```bash
-python -m compileall -q .
-python -m unittest discover -s tests -v
-```
-
-The smoke tests are intentionally small. Passing them means the package imports and its basic semantic pipeline executes; it does **not** establish scientific validity, consciousness, general intelligence, or production readiness.
-
-## Security and bridge boundary
-
-The initial development repository does not expose an MCP endpoint or a remote command-execution bridge. A Termux connection should be implemented as a narrow, authenticated IPC adapter around the `Bridge` API—not by exposing Python evaluation, shell commands, arbitrary file access, or the full `AllMynd` object.
+The repository does not expose an MCP endpoint or a remote command-execution bridge. A Termux connection should be implemented as a narrow, authenticated IPC adapter around the `Bridge` API — not by exposing Python evaluation, shell commands, arbitrary file access, or the full `AllMynd` object.
 
 Until that adapter exists and is reviewed:
 
@@ -59,14 +48,20 @@ Until that adapter exists and is reviewed:
 2. Treat `allmynd_v1.json` and any exported vessel files as private runtime state.
 3. Never commit API keys, phone credentials, private save files, audio recordings, or generated personal data.
 4. Review every historical `fix_*.py` script before running it; they are retained for provenance and are not automatically executed.
-5. Prefer a local Unix-domain socket or an authenticated loopback client for development. Any phone-to-host transport should use an encrypted channel and a least-privilege allowlist.
 
 See [`SECURITY.md`](SECURITY.md) for the reporting and hardening boundary.
 
-## Project status
+## Development checks
 
-This is a build repository. The changelog contains both verified work and open findings, so it must not be treated as a release checklist. Before claiming a fix, add a focused regression test and record the verification method in the changelog.
+```bash
+python -m compileall -q .
+python -m unittest discover -s tests -v
+```
+
+## Provenance
+
+`semantic_engine/lqe_core/statevector.py` is vendored from [Legitimate-Quantum-Engine](https://github.com/ethancjohnson0806-source/Legitimate-Quantum-Engine) (MIT). If that project's `statevector.py` changes upstream, re-vendor by replacing the file wholesale rather than hand-editing drift.
 
 ## License
 
-This project is released under the MIT License. See [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Runtime and personal data
+allmynd_v1.json
+allmynd_v1.json.*
+*.emergency
+*.wav
+*.mp3
+*.ogg
+vessels/
+logs/
+
+# Local tooling
+.DS_Store
+.env
+.env.*

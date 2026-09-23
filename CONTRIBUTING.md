@@ -11,7 +11,7 @@ Read the relevant source and the matching sections of `ALLMYND_CHANGELOG.md`. Tr
 1. A focused regression test or a documented reason a test cannot be added.
 2. A changelog entry describing what was verified and how.
 3. No runtime state, credentials, phone data, or generated audio in the commit.
-4. A clear note when behavior is experimental, nondeterministic, or dependent on Termux APIs.
+4. A clear note when behavior is experimental or nondeterministic.
 
 ## Bridge changes
 

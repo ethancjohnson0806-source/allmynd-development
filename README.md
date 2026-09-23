@@ -38,17 +38,11 @@ python mind_server.py
 
 Then open <http://127.0.0.1:8080>.
 
-For phone operation and the authenticated Termux bridge, see [`docs/REAL_WORLD_USE.md`](docs/REAL_WORLD_USE.md) and [`docs/TERMUX_BRIDGE.md`](docs/TERMUX_BRIDGE.md).
+## Security and local-runtime boundary
 
-## Security and network boundary
-
-The repository does not expose an MCP endpoint or a remote command-execution bridge. A Termux connection should be implemented as a narrow, authenticated IPC adapter around the `Bridge` API — not by exposing Python evaluation, shell commands, arbitrary file access, or the full `AllMynd` object.
-
-Until that adapter exists and is reviewed:
-
-1. Keep `mind_server.py` bound to `127.0.0.1`.
+1. Keep `mind_server.py` bound to `127.0.0.1` unless a separately reviewed deployment adds authentication and transport security.
 2. Treat `allmynd_v1.json` and any exported vessel files as private runtime state.
-3. Never commit API keys, phone credentials, private save files, audio recordings, or generated personal data.
+3. Never commit API keys, private save files, audio recordings, or generated personal data.
 4. Review every historical `fix_*.py` script before running it; they are retained for provenance and are not automatically executed.
 
 See [`SECURITY.md`](SECURITY.md) for the reporting and hardening boundary.

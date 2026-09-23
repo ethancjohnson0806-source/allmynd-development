@@ -11,6 +11,7 @@ The archive preserves the split project as received:
 - `run.py` provides a terminal interface.
 - `mind_server.py` provides a small local browser interface.
 - `quantum_state.py` is retained as a top-level compatibility module.
+- semantic_engine/lqe_core/statevector.py is vendored from Legitimate-Quantum-Engine (MIT).
 - `ALLMYND_CHANGELOG.md` is the historical handoff and audit record.
 
 The code is intentionally preserved rather than rewritten during repository creation. Existing behavior and open issues must be verified against the source before changes are made.
@@ -68,4 +69,4 @@ This is a build repository. The changelog contains both verified work and open f
 
 ## License
 
-No license was supplied with the source archive. Until the project owner chooses and adds a license, the source remains available for repository collaboration but is not granted an open-source reuse license.
+This project is released under the MIT License. See [`LICENSE`](LICENSE).

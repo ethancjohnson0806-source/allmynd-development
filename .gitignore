@@ -1,24 +1,11 @@
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-.pytest_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-
-# Runtime and personal data
+*.pyc
+*.pyo
 allmynd_v1.json
-allmynd_v1.json.*
-*.emergency
-*.wav
-*.mp3
-*.ogg
+allmynd_v1.json.emergency
 vessels/
-logs/
-
-# Local tooling
+*.bak_*
+sound_breath_*.wav
+field_ear_*.wav
+*.raw.m4a
 .DS_Store
-.env
-.env.*

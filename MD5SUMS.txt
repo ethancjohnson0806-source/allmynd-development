@@ -1,0 +1,4 @@
+d6c5f101e27b482cc544c7e99d96321b  run.py
+e4d98a874abd3730befc1d68b843a22d  allmynd/mind.py
+67fc1fc95c71bc71893e12f1c29c2be9  semantic_engine/quantum.py
+3dedb2e14029bc5ef3296ffb1b4bcecb  semantic_engine/query.py

@@ -127,6 +127,29 @@ class QuantumState:
         "reserved": 0.0,
     }
 
+    # #23 (fix_noise_modes.py): per-mode multipliers on REGISTER_NOISE.
+    # Blended continuously by noise_profile(); never switched discretely.
+    MODE_NOISE_MULT = {
+        "exploring": {"intention": 1.0, "attention": 2.5, "memory": 1.0},
+        "present":   {"intention": 0.4, "attention": 0.4, "memory": 1.0},
+        "tired":     {"intention": 3.0, "attention": 1.5, "memory": 1.0},
+    }
+
+    def noise_profile(self, exploring=0.0, present=0.0, tired=0.0):
+        """Blend REGISTER_NOISE with the mode multipliers. Each weight is
+        clamped to 0..1 and scales how far that mode pulls the register's
+        multiplier away from 1.0. All zeros -> exactly REGISTER_NOISE."""
+        w = {"exploring": exploring, "present": present, "tired": tired}
+        w = {k: max(0.0, min(1.0, float(v))) for k, v in w.items()}
+        out = {}
+        for reg, base in self.REGISTER_NOISE.items():
+            mult = 1.0
+            for mode, wt in w.items():
+                mult += wt * (self.MODE_NOISE_MULT[mode].get(reg, 1.0) - 1.0)
+            out[reg] = base * max(0.0, mult)
+        self.last_noise_weights = w
+        return out
+
     def __init__(self, n_qubits=N_QUBITS, seed_state=None):
         self.sim = StatevectorSim(n_qubits)
         self.dim = self.sim.dim
@@ -228,7 +251,7 @@ class QuantumState:
 
     # ── decoherence: single-trajectory Monte Carlo Pauli noise ──────────
 
-    def apply_noise(self, vitality, base_rate=0.12):
+    def apply_noise(self, vitality, base_rate=0.12, profile=None):
         """
         Per-qubit, independently: with probability
         p = base_rate * REGISTER_NOISE[register] * (1 - vitality),
@@ -243,7 +266,7 @@ class QuantumState:
                 reg_of[q] = name
         for q in range(self.n):
             reg = reg_of.get(q, "reserved")
-            rate = self.REGISTER_NOISE.get(reg, 0.0)
+            rate = (profile if profile is not None else self.REGISTER_NOISE).get(reg, 0.0)
             p = base_rate * rate * (1.0 - vitality)
             self._accumulated_noise += p
             if random.random() < p:
@@ -410,7 +433,7 @@ class QuantumState:
 
     def status(self):
         return (f"QuantumState: turn={self.turn_count}, "
-                f"coherence_estimate={self.coherence_estimate():.3f}, "
+                f"noise_counter={self.coherence_estimate():.3f}, "
                 f"norm={np.linalg.norm(self.sim.state):.4f}, "
                 f"registers={self.register_status()}")
 

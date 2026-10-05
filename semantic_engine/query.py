@@ -306,7 +306,8 @@ def get_candidates_for_role(field_state, role, beam, word_vectors_ternary,
         suppression = reflector.get_suppression(word) if reflector is not None else 0.0
         bias = bias_fn(word, vec) if bias_fn is not None else 0.0
 
-        score = sim * strength * (1.0 - suppression) + bias
+        # fix_repeat_bias.py: the repeat reduction now covers the bias too
+        score = (sim * strength + bias) * (1.0 - suppression)
         candidates.append((word, score))
 
     candidates.sort(key=lambda x: x[1], reverse=True)

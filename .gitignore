@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 allmynd_v1.json
 allmynd_v1.json.emergency
+mind_log.jsonl
 vessels/
 *.bak_*
 sound_breath_*.wav

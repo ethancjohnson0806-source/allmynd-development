@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from allmynd.mind import AllMynd
 
 SAVE_PATH = "allmynd_v1.json"
+# Autosave at most this often (seconds) while talking; 0 = after every turn.
+AUTOSAVE_SECONDS = float(os.environ.get("ALLMYND_AUTOSAVE_SECONDS", "180"))
 
 SLASH_COMMANDS = {
     "status": lambda m: print(m.status()),
@@ -28,7 +30,33 @@ SLASH_COMMANDS = {
     "thread": lambda m: _do_thread(m),
     "hear":   lambda m: print(_do_hear(m)),
     "sing":   lambda m: print(_do_sing(m)),
+    "log":    lambda m: _do_log(m),
+    "logpath": lambda m: print(os.path.abspath(m.log_path)),
 }
+
+def _do_log(mind):
+    """Print the last 5 logged turns, human-readable. fix_mind_log.py."""
+    import json as _json
+    path = mind.log_path
+    if not os.path.exists(path):
+        print("No log yet -- mind_log.jsonl doesn't exist.")
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [ln for ln in f if ln.strip()]
+    if not lines:
+        print("Log file exists but is empty.")
+        return
+    for ln in lines[-5:]:
+        try:
+            e = _json.loads(ln)
+        except _json.JSONDecodeError:
+            print("  (unreadable line)")
+            continue
+        print(f"  turn {e.get('turn')}: region={e.get('region')} "
+              f"stance={e.get('stance')} presence={e.get('presence')} "
+              f"coherence={e.get('coherence')}")
+        print(f"    you:  {e.get('user')}")
+        print(f"    mind: {e.get('output')}")
 
 def _do_quit(mind):
     """Graceful shutdown: final message, save, signal exit."""
@@ -217,6 +245,7 @@ def main():
     print()
     print_commands()
 
+    _last_save = time.time()
     try:
         while True:
             try:
@@ -243,6 +272,9 @@ def main():
             else:
                 print(f"Mind: {response}")
             print()
+            if time.time() - _last_save >= AUTOSAVE_SECONDS:
+                mind.save(SAVE_PATH, quiet=True)
+                _last_save = time.time()
 
     except Exception as e:
         print(f"\n[Error: {e}]")

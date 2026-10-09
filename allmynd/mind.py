@@ -1497,7 +1497,7 @@ class FieldMemory:
         now = time.time()
         current_mood = self.buffer[-1]['mood'] if self.buffer else {'valence': 0, 'arousal': 0.5}
         for i, memory in enumerate(reversed(self.buffer)):
-            age = now - memory['timestamp']
+            age = max(0.0, now - memory['timestamp'])  # future-dated memory is treated as just now
             time_weight = np.exp(-self.decay_rate * age)
             position_weight = recency_weight ** i
             mood_sim = self._mood_similarity(current_mood, memory['mood'])
@@ -2049,7 +2049,7 @@ class DreamLoop:
             sim = float(np.dot(current_float, entry_float))
             presence = entry.get('presence', 0.5)
             intensity = presence
-            age = time.time() - entry.get('timestamp', time.time())
+            age = abs(time.time() - entry.get('timestamp', time.time()))
             recency = math.exp(-age / 3600)
             score = sim * 0.3 + intensity * 0.3 + recency * 0.4
             candidates.append((entry, score))

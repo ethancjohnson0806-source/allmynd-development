@@ -245,7 +245,7 @@ def main():
     print()
     print_commands()
 
-    _last_save = time.time()
+    _last_save = time.monotonic()  # elapsed-time timer; unaffected by wall-clock changes
     try:
         while True:
             try:
@@ -272,9 +272,9 @@ def main():
             else:
                 print(f"Mind: {response}")
             print()
-            if time.time() - _last_save >= AUTOSAVE_SECONDS:
+            if time.monotonic() - _last_save >= AUTOSAVE_SECONDS:
                 mind.save(SAVE_PATH, quiet=True)
-                _last_save = time.time()
+                _last_save = time.monotonic()
 
     except Exception as e:
         print(f"\n[Error: {e}]")
@@ -288,4 +288,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

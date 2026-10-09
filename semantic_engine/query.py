@@ -162,7 +162,7 @@ class PhraseSystem:
         now = time.time()
         to_remove = []
         for sig, phrase in self.phrases.items():
-            age = now - phrase.last_used
+            age = max(0.0, now - phrase.last_used)
             phrase.frequency *= math.exp(-DECAY_RATE * age)
             if phrase.frequency < 0.1:
                 to_remove.append(sig)

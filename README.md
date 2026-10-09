@@ -84,7 +84,7 @@ See [`SECURITY.md`](SECURITY.md) for the security boundary.
 
 ## Provenance
 
-`STATE_NOTES.md` records the current snapshot reconstruction and latest applied fix order. `MD5SUMS.txt` records checksums for key files from the supplied snapshot.
+`STATE_NOTES.md` records the snapshot reconstruction and subsequent reviewed changes. `MD5SUMS.txt` preserves the original baseline checksums; later clock-resilience edits are documented in `STATE_NOTES.md` and intentionally do not match that baseline.
 
 `semantic_engine/lqe_core/statevector.py` is vendored from the [Legitimate Quantum Engine](https://github.com/ethancjohnson0806-source/Legitimate-Quantum-Engine) project. If that upstream file changes, re-vendor it as a whole after comparing behavior and tests rather than hand-editing drift.
 

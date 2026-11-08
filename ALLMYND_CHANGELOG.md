@@ -9,6 +9,10 @@ deleting it.*
 
 ---
 
+## 2026-11-07 — Safe source snapshot utility
+
+Added `tools/make_snapshot.py` to build a deterministic, checksummed ZIP of selected runtime source, project context, tests, and the required word-vector asset. The allowlist and exclusions intentionally omit mind saves, logs, vessels, backups, caches, audio, environment files, and non-allowlisted data. It does not run or mutate the mind. Verification is covered by `tests/test_make_snapshot.py`; users should inspect an archive before sharing it because selected source can still contain sensitive material.
+
 ## READ THIS FIRST — the two lineages
 
 **ALL MY'ND is not a replacement for ALIEN MIND. It IS Alien Mind, split

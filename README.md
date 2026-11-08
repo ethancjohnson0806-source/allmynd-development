@@ -72,6 +72,16 @@ python -m unittest discover -s tests -v
 
 The repository also retains historical fix scripts. Review them before running; they are provenance artifacts and are not executed automatically.
 
+## Creating a source snapshot
+
+To create a code-and-project-context ZIP for review or a new development chat, run from the repository root:
+
+```bash
+python tools/make_snapshot.py --output-dir ~/downloads
+```
+
+The tool includes selected runtime source, project documentation, development tooling, tests, and the word-vector asset, plus a SHA-256 manifest. It excludes runtime saves, logs, vessels, backups, caches, audio, environment files, and files outside its allowlist. It does not modify the mind or start a server. The archive contains the current on-disk contents of selected files, including local edits; review it before sharing because source files may still contain sensitive material. This is **not** a backup of a mind's saved state.
+
 ## Security and local-runtime boundary
 
 1. Keep `mind_server.py` bound to `127.0.0.1` unless a separately reviewed deployment adds authentication and transport security.

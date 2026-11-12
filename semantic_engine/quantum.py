@@ -55,6 +55,7 @@ import random
 import numpy as np
 
 from semantic_engine.lqe_core.statevector import StatevectorSim
+from semantic_engine.lqe_core.stabilizer import choose_backend as _choose_backend
 
 try:
     from semantic_core import DIM, NORMALIZED_VECTOR_THRESHOLD
@@ -208,7 +209,91 @@ class QuantumState:
 
     # ── evolution (no reset - this is the whole point) ──────────────────
 
+    # ── #24 (fix_circuit_simplify.py): exact circuit simplification ─────
+
+    @staticmethod
+    def optimize_circuit(gates):
+        """Exact peephole optimizer. gates: ("RY"|"RZ", angle, qubit) or
+        ("CNOT", control, target). Returns an equivalent, usually shorter list."""
+        ops = []
+        stacks = {}
+
+        def top(q):
+            s = stacks.get(q)
+            return s[-1] if s else None
+
+        for g in gates:
+            name = g[0]
+            if name in ("RY", "RZ"):
+                ang, q = g[1], g[2]
+                t = top(q)
+                if t is not None and ops[t][0] == name:
+                    ops[t][1] += ang
+                else:
+                    ops.append([name, ang, q])
+                    stacks.setdefault(q, []).append(len(ops) - 1)
+            else:
+                c, tg = g[1], g[2]
+                a, b = top(c), top(tg)
+                if (a is not None and a == b and ops[a][0] == "CNOT"
+                        and ops[a][1] == c and ops[a][2] == tg):
+                    stacks[c].pop()
+                    stacks[tg].pop()
+                    ops[a] = None
+                else:
+                    ops.append(["CNOT", c, tg])
+                    i = len(ops) - 1
+                    stacks.setdefault(c, []).append(i)
+                    stacks.setdefault(tg, []).append(i)
+        return [tuple(o) for o in ops
+                if o is not None and not (o[0] != "CNOT" and abs(o[1]) < 1e-12)]
+
+    def _build_evolve_circuit(self, mood, tensions, coupling):
+        """Same gates, same order, as _evolve_direct -- as a list."""
+        gates = []
+        valence = mood.get('valence', 0.0)
+        arousal = mood.get('arousal', 0.5)
+        theta = (valence + 1.0) * math.pi / 2
+        theta *= coupling * (0.5 + arousal * 0.5)
+        for q in range(self.n):
+            gates.append(("RY", theta, q))
+        intention_theta = theta * (0.5 + arousal * 0.5)
+        for q in self._qubits_in("intention"):
+            gates.append(("RY", intention_theta, q))
+        vals = [tensions.get(name, 0.0) for name in TENSION_NAMES]
+        pairs = []
+        for register in ("intention", "attention", "memory"):
+            qubits = list(self._qubits_in(register))
+            for left, right in zip(qubits, qubits[1:]):
+                pairs.append((left, right))
+        if abs(arousal - 0.5) > 0.05:
+            for prev, cur in zip(("intention", "attention", "memory"), ("attention", "memory")):
+                pairs.append((self._qubits_in(prev)[-1], self._qubits_in(cur)[0]))
+        for i in range(len(vals)):
+            for j in range(i + 1, len(vals)):
+                if abs(vals[i]) > 0.05 or abs(vals[j]) > 0.05:
+                    phase = (vals[i] - vals[j]) * math.pi * coupling
+                    c, t = pairs[min(i, len(pairs) - 1)]
+                    gates.append(("CNOT", c, t))
+                    gates.append(("RZ", phase, t))
+                    gates.append(("CNOT", c, t))
+        return gates
+
     def evolve(self, mood, tensions, coupling=0.35):
+        """Build the turn's circuit, simplify it exactly, run it."""
+        gates = self._build_evolve_circuit(mood, tensions, coupling)
+        fast = self.optimize_circuit(gates)
+        self.last_circuit_stats = (len(gates), len(fast))
+        self.last_backend = _choose_backend(fast, from_fresh_state=False)
+        for g in fast:
+            if g[0] == "CNOT":
+                self._apply_2q_cnot(g[1], g[2])
+            else:
+                self.sim.apply(g[0], g[1], g[2])
+        self._renormalize()
+        self.turn_count += 1
+
+    def _evolve_direct(self, mood, tensions, coupling=0.35):
         """
         Apply mood/tension-driven rotations ON TOP of whatever state
         already exists — identical formulas and call sequence to Phase

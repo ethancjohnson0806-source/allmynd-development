@@ -32,6 +32,9 @@ SLASH_COMMANDS = {
     "sing":   lambda m: print(_do_sing(m)),
     "log":    lambda m: _do_log(m),
     "logpath": lambda m: print(os.path.abspath(m.log_path)),
+    "teach":  lambda m: print("  usage: /teach <file>"),
+    "plan":   lambda m: print("  " + m.plan_layer.describe() + "   (/plan on | /plan off)"),
+    "map":    lambda m: _do_map(m),
 }
 
 def _do_log(mind):
@@ -173,10 +176,80 @@ def _handle_pool_command(cmd, mind):
     else:
         print("  usage: /pool [list | consult <vessel> | fork <vessel>]")
 
+def _do_teach(arg, mind):
+    """fix_teach_banner: /teach <file> -- feed a text file in as lessons."""
+    if not arg:
+        print("  usage: /teach <file>   (looked up as typed, then here, then in Downloads)")
+        return
+    cands = [arg, os.path.join(os.getcwd(), arg),
+             os.path.expanduser(os.path.join("~/storage/downloads", arg)),
+             os.path.join("/sdcard/Download", arg)]
+    path = next((c for c in cands if os.path.isfile(c)), None)
+    if path is None:
+        print(f"  no such file: {arg}")
+        return
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+    except OSError as e:
+        print(f"  could not read {arg}: {e}")
+        return
+    odd = sum(1 for b in head if b < 9 or 13 < b < 32 or b == 127)
+    if b"\x00" in head or (head and odd / len(head) > 0.02):
+        print("  that looks like a binary file (audio, image, zip...). /teach only reads text files.")
+        return
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read(400000)
+    except OSError as e:
+        print(f"  could not read {arg}: {e}")
+        return
+    r = mind.teach_text(text, source=os.path.basename(path))
+    if not r["passages"]:
+        print("  nothing to teach in that file.")
+        return
+    msg = (f"  taught {r['passages']} passages from {os.path.basename(path)}: "
+           f"{r['new_words']} new words (vocabulary now {r['vocab']}), 1 memory stored.")
+    if r["skipped"]:
+        msg += f" {r['skipped']} more passages skipped (limit 400 per command; run it again with the rest)."
+    print(msg)
+    print("  /save to keep it.")
+
+def _do_map(mind, arg=""):
+    """fix_field_map_2: /map -- a 3D snapshot of the field as a web page."""
+    outdir = os.path.join(os.getcwd(), "mind_maps")
+    try:
+        from allmynd import fieldmap
+        path, latest, data = fieldmap.make_map(mind, outdir=outdir)
+        url = fieldmap.serve(outdir) + "mind_map_latest.html"
+    except Exception as e:
+        print(f"  could not make the map: {e}")
+        return
+    print(f"  map saved: {path}")
+    print(f"  open in your browser: {url}   (works while the mind is running)")
+    print("  or from the Files app: Download > mind_maps > mind_map_latest.html")
+    if arg.strip().lower() != "file":
+        try:
+            import subprocess
+            subprocess.run(["termux-open", url], timeout=6)
+        except Exception:
+            pass
+
 def handle_command(user_input, mind):
     """Returns 'QUIT', 'HANDLED', or None (not a command)."""
     if not user_input.startswith("/"):
         return None
+    _raw = user_input[1:].strip()
+    if _raw.lower() == "teach" or _raw.lower().startswith("teach "):
+        _do_teach(_raw[5:].strip(), mind)
+        return "HANDLED"
+    if _raw.lower() in ("plan on", "plan off"):
+        mind.plan_layer.enabled = _raw.lower().endswith("on")
+        print("  " + mind.plan_layer.describe())
+        return "HANDLED"
+    if _raw.lower() == "map" or _raw.lower().startswith("map "):
+        _do_map(mind, _raw[3:])
+        return "HANDLED"
     cmd = user_input[1:].strip().lower()
     if not cmd:
         return None
@@ -208,6 +281,9 @@ def print_commands():
     for cmd in sorted(SLASH_COMMANDS.keys()):
         desc = {
             "status": "full mind state",
+            "teach":  "feed a text file in as lessons",
+            "plan":   "sentence planning layer: /plan on|off",
+            "map":    "3D snapshot of the field (opens a web page)",
             "save":   "persist to disk",
             "quit":   "save and exit",
             "exit":   "save and exit",
@@ -245,7 +321,7 @@ def main():
     print()
     print_commands()
 
-    _last_save = time.time()
+    _last_save = time.monotonic()  # monotonic: immune to the phone's date being changed
     try:
         while True:
             try:
@@ -272,9 +348,9 @@ def main():
             else:
                 print(f"Mind: {response}")
             print()
-            if time.time() - _last_save >= AUTOSAVE_SECONDS:
+            if time.monotonic() - _last_save >= AUTOSAVE_SECONDS:
                 mind.save(SAVE_PATH, quiet=True)
-                _last_save = time.time()
+                _last_save = time.monotonic()
 
     except Exception as e:
         print(f"\n[Error: {e}]")

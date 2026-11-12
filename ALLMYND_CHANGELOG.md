@@ -9,6 +9,10 @@ deleting it.*
 
 ---
 
+## 2026-11-12 — Sync user-provided phone source snapshot
+
+Synced the code/model files from `allmynd_phone_20261109_0941.zip` into the development repository while retaining repository-only docs, tests, packaging, and CI files. Four existing source modules changed (`allmynd/mind.py`, `run.py`, `semantic_engine/quantum.py`, `semantic_engine/query.py`); three source modules were added (`allmynd/fieldmap.py`, `allmynd/plan.py`, `semantic_engine/lqe_core/stabilizer.py`). The added work includes the `/map`, `/plan`, and `/teach` phone commands, planning and observation features, persistence extensions, and an experimental stabilizer simulator/router. The persistent mind state still uses the statevector runtime path; the stabilizer simulator is not yet active there. The archive's `allmynd/vessels/node_id.txt` was deliberately excluded as per-install runtime identity. `STATE_NOTES.md` records provenance and `MD5SUMS.txt` was refreshed. Verification passed: `python3 -m compileall -q .`, all 9 unit tests, `md5sum -c MD5SUMS.txt`, and `git diff --check`. This entry does not claim scientific validation or production readiness.
+
 ## READ THIS FIRST — the two lineages
 
 **ALL MY'ND is not a replacement for ALIEN MIND. It IS Alien Mind, split

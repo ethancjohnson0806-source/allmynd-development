@@ -63,6 +63,16 @@ python mind_server.py
 
 Then open <http://127.0.0.1:8080>.
 
+## Phone runner commands
+
+The terminal runner includes additional commands from the latest phone source sync:
+
+- `/plan on` or `/plan off` enables or disables the experimental sentence-planning candidate.
+- `/teach <text-file>` reads a local text file as learning input (up to 400 passages per call); it changes mind state, so use `/save` if you want to keep the result.
+- `/map` writes an interactive HTML snapshot under `mind_maps/` and serves it on loopback (`127.0.0.1`) for the local browser. The map can contain learned words and recent-memory positions; treat the generated file as private and do not publish it.
+
+Generated maps, quantum sidecars, and landmark migration backups are ignored by Git.
+
 ## Development checks
 
 ```bash
@@ -84,7 +94,7 @@ See [`SECURITY.md`](SECURITY.md) for the security boundary.
 
 ## Provenance
 
-`STATE_NOTES.md` records the current snapshot reconstruction and latest applied fix order. `MD5SUMS.txt` records checksums for key files from the supplied snapshot.
+`STATE_NOTES.md` records the current user-provided phone source snapshot and the earlier reconstructed snapshot's historical provenance. `MD5SUMS.txt` records checksums for key source files in the current sync.
 
 `semantic_engine/lqe_core/statevector.py` is vendored from the [Legitimate Quantum Engine](https://github.com/ethancjohnson0806-source/Legitimate-Quantum-Engine) project. If that upstream file changes, re-vendor it as a whole after comparing behavior and tests rather than hand-editing drift.
 

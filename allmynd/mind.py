@@ -38,6 +38,7 @@ import threading
 import uuid
 import numpy as np
 from collections import defaultdict, deque, Counter
+from allmynd.plan import PlanLayer
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional, Set, Any, Tuple
 
@@ -1080,6 +1081,10 @@ class PhysicsField:
 # blocks, gates, or overrides generation the way the old recovery-
 # silence mechanism did.
 
+REP_WINDOW = 8     # fix_truthful_circling: look at the last 8 real replies
+REP_MIN_COUNT = 6  # circling = ONE word is in at least 6 of them
+
+
 class Window:
     """A lightweight self-observer. Watches for two signs of being
     stuck - repeating the same stance, or the field's own predictions
@@ -1092,6 +1097,9 @@ class Window:
         self.prediction_error_threshold = prediction_error_threshold
         self.recent_stances = deque(maxlen=stance_repeat_threshold)
         self.observations = deque(maxlen=20)
+        # fix_truthful_circling: which word does the mind keep coming back to?
+        self.recent_replies = deque(maxlen=REP_WINDOW)
+        self._last_repeat = None
 
     def to_dict(self):
         return {
@@ -1105,9 +1113,41 @@ class Window:
     def observe_stance(self, stance):
         self.recent_stances.append(stance)
 
+    @staticmethod
+    def _content_words(text):
+        try:
+            from allmynd.plan import _LAB
+        except Exception:
+            _LAB = {}
+        toks = ["".join(ch for ch in w if ch.isalpha()) for w in str(text).lower().split()]
+        return {t for t in toks if len(t) > 2 and _LAB.get(t) != "FUNC"}
+
+    def observe_reply(self, text):
+        """fix_truthful_circling: remember this reply's content words and find
+        the word that turns up in the most of the last few replies."""
+        self.recent_replies.append(self._content_words(text))
+        n = len(self.recent_replies)
+        if n < REP_WINDOW:
+            self._last_repeat = None
+            return
+        counts = {}
+        for st in self.recent_replies:
+            for w in st:
+                counts[w] = counts.get(w, 0) + 1
+        if not counts:
+            self._last_repeat = None
+            return
+        word = max(counts, key=lambda w: (counts[w], w))
+        self._last_repeat = {"word": word, "k": counts[word], "of": n}
+
+    def is_repeating(self):
+        r = self._last_repeat
+        return bool(r) and r["k"] >= REP_MIN_COUNT
+
     def is_circling(self):
         return (len(self.recent_stances) == self.stance_repeat_threshold
-                and len(set(self.recent_stances)) == 1)
+                and len(set(self.recent_stances)) == 1
+                and self.is_repeating())
 
     def is_scattered(self, prediction_error_history):
         if len(prediction_error_history) < 3:
@@ -1118,12 +1158,17 @@ class Window:
     def speak(self, reason):
         if reason == "circling":
             phrases = ["I feel myself circling.", "I keep returning to the same place.", "This again."]
+            if self._last_repeat and self._last_repeat.get("word"):
+                phrases.append("I keep returning to %s." % self._last_repeat["word"])
         elif reason == "scattered":
             phrases = ["The field is scattered here.", "I can't find my footing.", "Something has come loose."]
         else:
             phrases = ["I notice myself."]
         utterance = random.choice(phrases)
         self.observations.append({'reason': reason, 'utterance': utterance, 'timestamp': time.time()})
+        if reason == "circling":
+            self.recent_replies.clear()
+            self._last_repeat = None
         return utterance
 
     def check(self, prediction_error_history):
@@ -1497,7 +1542,7 @@ class FieldMemory:
         now = time.time()
         current_mood = self.buffer[-1]['mood'] if self.buffer else {'valence': 0, 'arousal': 0.5}
         for i, memory in enumerate(reversed(self.buffer)):
-            age = now - memory['timestamp']
+            age = max(0.0, now - memory['timestamp'])  # fix_clock_jumps.py: future-dated memory = just now
             time_weight = np.exp(-self.decay_rate * age)
             position_weight = recency_weight ** i
             mood_sim = self._mood_similarity(current_mood, memory['mood'])
@@ -1798,6 +1843,15 @@ class MoralCompass:
 
     def orient(self, field_state, user_input, presence, separation, nested_memory):
         field_state = field_state / (np.linalg.norm(field_state) + 1e-8)
+        # fix_compass_input: remove the shared direction all fields carry
+        _m = getattr(self, '_field_mean', None)
+        if _m is None:
+            _m = field_state.copy()
+        else:
+            _m = _m * 0.95 + field_state * 0.05
+        self._field_mean = _m
+        field_state = field_state - _m
+        field_state = field_state / (np.linalg.norm(field_state) + 1e-8)
         tensions = {}
         for name, vector in self.values.items():
             tensions[name] = float(np.dot(field_state, vector))
@@ -2049,7 +2103,9 @@ class DreamLoop:
             sim = float(np.dot(current_float, entry_float))
             presence = entry.get('presence', 0.5)
             intensity = presence
-            age = time.time() - entry.get('timestamp', time.time())
+            # fix_clock_jumps.py: |gap|, so a memory dated in the future (phone clock
+            # changed) counts as old instead of overflowing exp()
+            age = abs(time.time() - entry.get('timestamp', time.time()))
             recency = math.exp(-age / 3600)
             score = sim * 0.3 + intensity * 0.3 + recency * 0.4
             candidates.append((entry, score))
@@ -2121,7 +2177,7 @@ class LandmarkMap:
     generation is a deliberate future step, not this one.
     """
 
-    def __init__(self, dim=DIM, max_landmarks=40, merge_threshold=0.15, pending_window=20):
+    def __init__(self, dim=DIM, max_landmarks=40, merge_threshold=0.6, pending_window=20):
         self.dim = dim
         self.max_landmarks = max_landmarks
         self.merge_threshold = merge_threshold  # cosine sim above this = "same place"
@@ -2297,9 +2353,22 @@ class LandmarkMap:
                 for lm in self.landmarks
             ],
             "next_id": self._next_id,
+            "space": "turn_field_v1",
         }
 
     def from_dict(self, data):
+        # fix_landmark_input: old saves charted self.state (a frozen point);
+        # their regions are not comparable with turn-field regions. Back
+        # them up once and start fresh -- nothing is deleted.
+        if data.get("landmarks") and data.get("space") != "turn_field_v1":
+            try:
+                import json as _json
+                with open("landmarks_old_%d.json" % int(time.time()), "w") as _f:
+                    _json.dump(data, _f)
+            except Exception:
+                pass
+            self._next_id = data.get("next_id", 0)
+            return
         # FIX (stable region id, fix_mind_log.py): legacy saves predate
         # per-landmark "id" entirely -- assign sequential ids on this
         # first load (stable from here on; they never had a real stable
@@ -3337,6 +3406,53 @@ class GhostMesh:
 
 
 
+class SelfAwareness:
+    """Read-only felt-states (fix_self_awareness.py). Observes; never steers.
+    Scores are deviations from the mind's own running baseline, 0..1."""
+
+    WARMUP = 10
+    FLOORS = {"latency": 5.0, "coherence": 0.01, "jump": 0.002}
+
+    def __init__(self):
+        self.stats = {}
+        self.n = 0
+        self.scores = {"overloaded": 0.0, "lost": 0.0, "scattered": 0.0}
+
+    def _z(self, key, x, bad_high):
+        m, v = self.stats.get(key, (x, 0.0))
+        sd = max(math.sqrt(v), self.FLOORS[key])
+        z = (x - m) / sd
+        a = 0.05
+        v = (1 - a) * (v + a * (x - m) ** 2)
+        self.stats[key] = (m + a * (x - m), v)
+        if not bad_high:
+            z = -z
+        return max(0.0, min(1.0, z / 3.0))
+
+    def observe(self, latency_ms=None, coherence=None, unresolved=0, field_jump=None):
+        raw = {"overloaded": 0.0, "lost": 0.0, "scattered": 0.0}
+        if latency_ms is not None:
+            raw["overloaded"] = self._z("latency", float(latency_ms), True)
+        if coherence is not None:
+            raw["lost"] = self._z("coherence", float(coherence), False)
+        raw["lost"] = max(raw["lost"], min(1.0, unresolved / 3.0))
+        if field_jump is not None:
+            raw["scattered"] = self._z("jump", float(field_jump), True)
+        self.n += 1
+        if self.n <= self.WARMUP:
+            return dict(self.scores)
+        for k in raw:
+            self.scores[k] = 0.5 * self.scores[k] + 0.5 * raw[k]
+        return dict(self.scores)
+
+    def status(self):
+        if self.n <= self.WARMUP:
+            return "Awareness: warming up (%d/%d turns)" % (self.n, self.WARMUP)
+        s = self.scores
+        return "Awareness: overloaded=%.2f lost=%.2f scattered=%.2f" % (
+            s["overloaded"], s["lost"], s["scattered"])
+
+
 class AllMynd:
     """The living mind that runs."""
 
@@ -3442,6 +3558,11 @@ class AllMynd:
         # fix_mind_log.py: passive turn logging (Phase 1 -- observation
         # only, see this file's own header for the two-phase plan).
         self.log_path = "mind_log.jsonl"
+        self.awareness = SelfAwareness()  # fix_self_awareness: read-only
+        self.plan_layer = PlanLayer()  # fix_plan_layer
+        self._aw_field = None
+        self._aw_prev = None
+        self._turn_t0 = time.time()
         self._last_landmark_match = None
         self._last_presence = 0.5
         self._self_field = np.zeros(DIM, dtype=np.float32)
@@ -3559,47 +3680,6 @@ class AllMynd:
     def _field_entropy(self, field_state):
         return float(np.std(field_state))
 
-    def _log_turn(self, user_input, response):
-        """
-        fix_mind_log.py, Phase 1 of 2: PURE OBSERVATION. Appends one JSON
-        line describing this turn. Never reads the log back, never feeds
-        it into generation or scoring -- Phase 2 (reading it back and
-        learning from it) is deliberately not built yet, so the log can
-        be trusted as clean ground truth first. Wrapped in try/except:
-        logging must never be able to break a real turn.
-
-        "region" is LandmarkMap's stable id (see the __init__/observe/
-        to_dict/from_dict changes in this same patch), not list
-        position -- position shifts on eviction, id does not.
-        "desire" uses source_name, not wants() -- wants() has a real
-        side effect (feeds future suppression decay) and calling it
-        again here would be the log steering behavior, which it must not.
-        """
-        try:
-            match = self._last_landmark_match
-            candidates = getattr(self, "_last_candidate_scores", None)
-            winner = None
-            if candidates:
-                winner = max(range(len(candidates)), key=lambda i: candidates[i])
-            entry = {
-                "turn": self.turn_count,
-                "time": time.time(),
-                "user": (user_input or "")[:500],
-                "output": response,
-                "region": match.get("id") if match else None,
-                "coherence": (round(float(self._phase_coherence), 4) if getattr(self, "_phase_coherence", None) is not None else None),
-                "separation": round(self.dynamic_separation.current_separation, 4),
-                "presence": round(getattr(self, "_last_presence", 0.5), 4),
-                "stance": getattr(self, "_last_stance", None),
-                "desire": self.desire.source_name,
-                "candidates": candidates,
-                "winner": winner,
-            }
-            with open(self.log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, default=float) + "\n")
-        except Exception:
-            pass  # logging observes; it must never break a real turn
-
     def _compute_input_freshness(self, user_words, window=60):
         """Share of this turn's content words (len > 2) NOT in the last
         `window` content words the user said. 1.0 = all fresh, 0.0 = all
@@ -3617,6 +3697,109 @@ class AllMynd:
         recent.extend(words)
         del recent[:-window]
         return fresh
+
+    # ── fix_noise_meter: read-only, observes what moves the field ──────
+    def _fm_record(self, before, after):
+        try:
+            nb, na = np.linalg.norm(before), np.linalg.norm(after)
+            if nb < 1e-9 or na < 1e-9:
+                return
+            body = 1.0 - float(np.dot(before, after) / (nb * na))
+            inp = None
+            prev = getattr(self, "_fm_prev", None)
+            if prev is not None:
+                npv = np.linalg.norm(prev)
+                if npv > 1e-9:
+                    inp = 1.0 - float(np.dot(prev, before) / (npv * nb))
+            self._fm_prev = np.array(before, dtype=np.float64)
+            ema = getattr(self, "_fm_ema", None) or {"body": body, "input": None, "n": 0}
+            a = 0.1
+            ema["body"] = (1 - a) * ema["body"] + a * body
+            if inp is not None:
+                ema["input"] = inp if ema["input"] is None else (1 - a) * ema["input"] + a * inp
+            ema["n"] += 1
+            self._fm_ema = ema
+            self._fm_last = {"body_shift": round(body, 4),
+                             "input_shift": None if inp is None else round(inp, 4)}
+        except Exception:
+            pass
+
+    def _fm_status(self):
+        e = getattr(self, "_fm_ema", None)
+        if not e or e["n"] < 5 or not e["input"]:
+            return "Field meter: warming up"
+        ratio = e["body"] / max(e["input"], 1e-9)
+        return "Field meter: body shift %.4f, input shift %.4f (body moves the field %.1fx as much as your input)" % (
+            e["body"], e["input"], ratio)
+
+    def _observe_awareness(self):
+        """fix_self_awareness: gather signals the turn already produced and
+        feed SelfAwareness. Pure observation -- returns scores for logging."""
+        try:
+            lat = (time.time() - self._turn_t0) * 1000.0
+            coh = getattr(self, "_phase_coherence", None)
+            unres = sum(1 for e in (getattr(self, "_ambiguity_errors", None) or [])
+                        if getattr(e, "resolved", 0) == -1)
+            jump = None
+            f, p = self._aw_field, self._aw_prev
+            if f is not None and p is not None and f is not p:
+                a = np.asarray(f, dtype=np.float64); b = np.asarray(p, dtype=np.float64)
+                d = np.linalg.norm(a) * np.linalg.norm(b)
+                if d > 1e-9:
+                    jump = 1.0 - float(np.dot(a, b) / d)
+            self._aw_prev = f
+            s = self.awareness.observe(latency_ms=lat, coherence=coh,
+                                       unresolved=unres, field_jump=jump)
+            return {k: round(v, 3) for k, v in s.items()}
+        except Exception:
+            return None
+
+    def _log_turn(self, user_input, response, kind=None):
+        """
+        fix_mind_log.py, Phase 1 of 2: PURE OBSERVATION. Appends one JSON
+        line describing this turn. Never reads the log back, never feeds
+        it into generation or scoring -- Phase 2 (reading it back and
+        learning from it) is deliberately not built yet, so the log can
+        be trusted as clean ground truth first. Wrapped in try/except:
+        logging must never be able to break a real turn.
+
+        "region" is LandmarkMap's stable id (see the __init__/observe/
+        to_dict/from_dict changes in this same patch), not list
+        position -- position shifts on eviction, id does not.
+        "desire" uses source_name, not wants() -- wants() has a real
+        side effect (feeds future suppression decay) and calling it
+        again here would be the log steering behavior, which it must not.
+        """
+        try:
+            match = self._last_landmark_match
+            aw = self._observe_awareness()
+            candidates = getattr(self, "_last_candidate_scores", None)
+            winner = None
+            if candidates:
+                winner = max(range(len(candidates)), key=lambda i: candidates[i])
+            entry = {
+                "turn": self.turn_count,
+                "time": time.time(),
+                "user": (user_input or "")[:500],
+                "output": response,
+                "region": match.get("id") if match else None,
+                "coherence": (round(float(self._phase_coherence), 4) if getattr(self, "_phase_coherence", None) is not None else None),
+                "separation": round(self.dynamic_separation.current_separation, 4),
+                "presence": round(getattr(self, "_last_presence", 0.5), 4),
+                "stance": (kind if kind else getattr(self, "_last_stance", None)),
+                "kind": kind,
+                "desire": self.desire.source_name,
+                "candidates": candidates,
+                "winner": winner,
+                "awareness": aw,
+                "field_meter": getattr(self, "_fm_last", None),
+                "plan": getattr(self, "_plan_last", None),
+                "repeat": getattr(self.window, "_last_repeat", None),
+            }
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=float) + "\n")
+        except Exception:
+            pass  # logging observes; it must never break a real turn
 
     def _compute_novelty(self, user_words):
         """
@@ -3715,8 +3898,38 @@ class AllMynd:
 
     # ─── Generate Response ──────────────────────────────────────────
 
+    def _region_observe(self, field, mood, presence):
+        """fix_landmark_input: chart this turn's input field, centered on a
+        slow running mean, instead of the near-frozen self.state."""
+        f = np.asarray(field, dtype=np.float64)
+        n = np.linalg.norm(f)
+        if n < 1e-8:
+            return None
+        f = f / n
+        m = getattr(self, "_region_mean", None)
+        m = f.copy() if m is None else m * 0.95 + f * 0.05
+        self._region_mean = m
+        c = (f - m).astype(np.float32)
+        cn = np.linalg.norm(c)
+        if cn > 1e-8:
+            self._region_prev = getattr(self, "_region_cur", None)
+            self._region_cur = c / cn
+        return self.landmarks.observe(c, self.turn_count, mood, presence)
+
+    def _region_anticipate(self):
+        cur = getattr(self, "_region_cur", None)
+        prev = getattr(self, "_region_prev", None)
+        if cur is None or prev is None:
+            return None
+        return self.landmarks.anticipate(cur, cur - prev)
+
     def generate_response(self, user_input, autonomous=False):
         self.turn_count += 1
+        self._last_candidate_scores = None  # fix_log_window: no stale scores
+        self._turn_t0 = time.time()  # fix_self_awareness
+        self._fm_last = None  # fix_noise_meter
+        if not autonomous:
+            self._plan_last = None  # fix_plan_layer
         self._pending_echo = None
 
         # ─── Phase 1-2: Perceive & Orient ──────────────────────────
@@ -3813,7 +4026,7 @@ class AllMynd:
             # Orient moral compass
             separation = self.speaker_regions.get_separation()
             tensions, heading = self.moral_compass.orient(
-                self.state, user_input, presence, separation, self.nested_memory
+                initial_field, user_input, presence, separation, self.nested_memory
             )
             compass_settings = self.moral_compass.get_compass_settings(tensions)
 
@@ -3852,7 +4065,7 @@ class AllMynd:
                 })
                 self._apply_gradient_step(0.015)
                 self.calculus.update(self.state)
-                self._last_landmark_match = self.landmarks.observe(self.state, self.turn_count, mood, presence)
+                self._last_landmark_match = self._region_observe(initial_field, mood, presence)
                 self._decay_word_strengths()
                 self._update_prediction_error()
                 self._record_objective()
@@ -3873,11 +4086,13 @@ class AllMynd:
                 # fresh repeated evidence before speaking again, rather
                 # than re-diagnosing the same stale moment forever.
                 self.window.recent_stances.clear()
+                self._log_turn(user_input, window_utterance, kind="window")
                 return window_utterance
 
         # ─── Phase 2.5: Quantum body ──────────────────────────────
 
         qb = self.quantum_body
+        self._aw_field = initial_field  # fix_self_awareness (read-only)
 
         # The mind leans before it knows why
         qb.apply_field_bias(
@@ -3889,25 +4104,19 @@ class AllMynd:
         # Quantum evolution
         qb.evolve(mood, tensions or {})
 
-        # Decoherence weather, computed here (moved up from below) so
-        # the change-of-mind check and the turn's own decoherence pass
-        # share the same real vitality value -- gently reduced on novel
-        # turns so the quantum body decoheres a bit faster when the mind
-        # is facing something unfamiliar.
+        # Measure if user is present — only the qubit the world touched
+        if not autonomous:
+            # #22 (fix_change_of_mind_wiring.py): check how decisively the commit qubit
+            # has settled before collapsing it; if it is still a toss-up, let a beat of
+            # decoherence pass and re-check (up to 2 extra tries), then commit.
+            _nov22 = getattr(self, "_last_novelty", 0.0)
+            qb.settle_intention(vitality=presence * (1.0 - _nov22 * 0.4))
+
+        # Decoherence (vitality = presence as weather, gently reduced on
+        # novel turns so the quantum body decoheres a bit faster when the
+        # mind is facing something unfamiliar).
         novelty = getattr(self, "_last_novelty", 0.0)
         vitality = presence * (1.0 - novelty * 0.4)
-
-        # Measure if user is present — only the qubit the world touched.
-        # #22 (fix_change_of_mind.py): doesn't collapse blind. Checks how
-        # decisively the commit qubit has actually settled first; if it's
-        # still a genuine toss-up, lets a beat of real decoherence pass
-        # and checks again (up to 2 extra tries) before finally
-        # committing. No external judge of "right" or "wrong" direction
-        # -- purely the state's own confidence in itself.
-        if not autonomous:
-            qb.settle_intention(vitality=vitality)
-
-        # Decoherence (vitality = presence as weather).
         # Decoherence (vitality = presence as weather).
         # #23 (fix_noise_modes.py): which registers decohere depends on
         # the mind's mode -- input freshness (exploring), presence
@@ -4007,7 +4216,9 @@ class AllMynd:
         novelty = getattr(self, "_last_novelty", 0.0)
         quantum_weight = 0.08 + novelty * 0.17  # 0.08 (familiar) .. 0.25 (novel)
         quantum_float = quantum_seed.astype(np.float32) * 0.7
+        _fm_before = np.array(field_state, dtype=np.float64)
         field_state = field_state * (1.0 - quantum_weight) + quantum_float * quantum_weight
+        self._fm_record(_fm_before, np.array(field_state, dtype=np.float64))
 
         field_state = _normalize_field(field_state)
 
@@ -4098,7 +4309,7 @@ class AllMynd:
                 # made).
                 self._apply_gradient_step(0.015)
                 self.calculus.update(self.state)
-                self._last_landmark_match = self.landmarks.observe(self.state, self.turn_count, mood, presence)
+                self._last_landmark_match = self._region_observe(initial_field, mood, presence)
                 self._decay_word_strengths()
                 self._update_prediction_error()
                 self._record_objective()
@@ -4130,11 +4341,29 @@ class AllMynd:
             gen_input = user_input if not autonomous else "I am thinking"
             baseline, candidates = self._generate_candidates(
                 voice_fn, gen_input, target_length, meta_settings, settled_field)
+            _plan_idx = None
+            _plan_info = None
+            if (not autonomous) and getattr(self, "plan_layer", None) is not None and self.plan_layer.enabled:
+                try:
+                    _pt, _plan_info = self.plan_layer.propose(self, gen_input, settled_field, voice_mode)
+                except Exception:
+                    _pt = None
+                if _pt:
+                    candidates.append((_pt, baseline))
+                    _plan_idx = len(candidates) - 1
             cand_scores = [self._score_candidate(text, baseline)
                            for text, _ in candidates]
             best_i = max(range(len(candidates)), key=lambda i: cand_scores[i])
             response, best_post = candidates[best_i]
             self._restore_generation_state(best_post)
+            if _plan_idx is not None:
+                _won = (best_i == _plan_idx)
+                self.plan_layer.note(_won)
+                self._plan_last = dict(_plan_info, won=_won)
+                if _won:
+                    for _w in [strip_punct(x) for x in response.lower().split()]:
+                        if _w:
+                            self.reflector.recent_words.append(_w)
             self._last_candidate_scores = [round(s, 3) for s in cand_scores]
 
             # Sometimes the mind names its want out loud. If it is asked
@@ -4250,12 +4479,13 @@ class AllMynd:
             self._last_stance_confidence = 0.0
 
         self.window.observe_stance(self._last_stance)
+        self.window.observe_reply(response)  # fix_truthful_circling
 
         # ─── Phase 8: Drift ────────────────────────────────────────
 
         self._apply_gradient_step(0.015)
         self.calculus.update(self.state)
-        self._last_landmark_match = self.landmarks.observe(self.state, self.turn_count, mood, presence)
+        self._last_landmark_match = self._region_observe(initial_field, mood, presence)
         self._decay_word_strengths()
         self._update_prediction_error()
         self._record_objective()
@@ -4758,6 +4988,38 @@ class AllMynd:
 
     # ─── Continuity Marker ──────────────────────────────────────────
 
+    def teach_text(self, text, source="teach", max_passages=400):
+        """fix_teach_banner: feed text in as lessons without forcing replies.
+        Words, strengths and word order are learned per passage; only ONE
+        memory is stored for the whole text."""
+        import re as _re
+        passages = [p.strip() for p in _re.split(r"(?<=[.!?])\s+|\n+", text or "") if p.strip()]
+        total = len(passages)
+        passages = passages[:max_passages]
+        before = len(self.word_vectors)
+        acc = np.zeros(DIM, dtype=np.float32)
+        used = 0
+        for p in passages:
+            words = [strip_punct(w) for w in p.lower().split() if strip_punct(w)]
+            words = [w for w in words if w.isprintable() and any(c.isalpha() for c in w)]  # fix_teach_guard
+            if not words:
+                continue
+            for w in words:
+                self._get_or_create_vector(w)
+                if w in self.word_vectors:
+                    self.word_strength[w] = max(self.word_strength.get(w, 0.0), 1.0)
+                    acc += self.word_vectors[w]
+            self.learning_system.learn(0.6, words, p)
+            used += 1
+        if used:
+            n = np.linalg.norm(acc)
+            if n > 1e-8:
+                acc = acc / n
+            self.memory_archive.store(acc, f"({source})", " ".join(passages[0].split()[:30]), 0.6,
+                                      tags=["knowledge", "external"])
+        return {"passages": used, "skipped": max(0, total - len(passages)),
+                "new_words": len(self.word_vectors) - before, "vocab": len(self.word_vectors)}
+
     def inherit_continuity_marker(self):
         """Read the continuity marker from the field."""
         marker = self.state[120:128]
@@ -4766,13 +5028,18 @@ class AllMynd:
         return None
 
     def recognize_past_self(self):
-        """Check if there was a previous run."""
-        marker = self.inherit_continuity_marker()
-        if marker is not None:
-            # Also check for quantum signature in memory archive
-            for entry in self.memory_archive.entries:
-                if 'quantum_signature' in entry.get('tags', []):
-                    return True
+        """Check if there was a previous run.
+        fix_teach_banner: the old test required a continuity marker whose
+        size swings at random after /quit, so a mind with hundreds of turns
+        could announce "the first time". Any turns, a stored end-of-run
+        memory, or the marker now count as a past."""
+        if self.turn_count > 0:
+            return True
+        if self.inherit_continuity_marker() is not None:
+            return True
+        for entry in self.memory_archive.entries:
+            if 'quantum_signature' in entry.get('tags', []):
+                return True
         return False
 
     # ─── Status ──────────────────────────────────────────────────────
@@ -4814,6 +5081,9 @@ class AllMynd:
             self.dream_loop.status(),
             self.quantum_body.status(),
             self.phase_field.status(),
+            self.awareness.status(),
+            self._fm_status(),
+            self.plan_layer.describe(),
             self.ambiguity_detector.status(),
             self.entanglement_memory.status(),
             "=" * 50,
@@ -4824,7 +5094,7 @@ class AllMynd:
         """Human-readable line for /status; anticipate() itself returns
         the raw dict for callers (like mind_server.py) that want the
         structured version instead of text."""
-        a = self.landmarks.anticipate(self.state, self.calculus.derivative)
+        a = self._region_anticipate()
         if a is None:
             return "Anticipation: heading somewhere unmapped (no strong precedent)"
         return (f"Anticipation: {a['tone']} (sim={a['similarity']:.2f}, "
@@ -4834,7 +5104,7 @@ class AllMynd:
         """Structured anticipation reading, for callers that want the
         dict rather than a formatted status line (e.g. mind_server.py's
         /stance endpoint)."""
-        return self.landmarks.anticipate(self.state, self.calculus.derivative)
+        return self._region_anticipate()
 
     # ─── Save / Load ────────────────────────────────────────────────
 
@@ -4845,6 +5115,9 @@ class AllMynd:
                 "state": self.state.tolist(),
                 "gradient_momentum": self.gradient_momentum.tolist(),
                 "word_strength": dict(self.word_strength),
+                "learned_words": sorted(
+                    w for w in self.word_vectors
+                    if w not in {strip_punct(x) for x in SEED_VOCABULARY}),  # fix_vocab_persist
                 "mood": {"valence": 0.0, "arousal": 0.5},
                 "associative_memory": self.associative_memory.to_dict(),
                 "entanglement_memory": self.entanglement_memory.to_dict(),
@@ -4914,10 +5187,72 @@ class AllMynd:
                 self._verified_save_sig = (_st.st_mtime_ns, _st.st_size)
             except OSError:
                 pass
+            self._save_quantum_sidecar(path)  # fix_quantum_persist
             if not quiet:
                 print(f"\nMind saved successfully to {path}")
         except Exception as e:
             print(f"\n[Warning: Save failed - {e}]")
+
+    # ── fix_quantum_persist: the body continues across sessions ────────
+    def _quantum_sidecar_path(self, path):
+        return str(path) + ".quantum.npz"
+
+    def _save_quantum_sidecar(self, path):
+        try:
+            import json as _j
+            qb, pf = self.quantum_body, self.phase_field
+            side = self._quantum_sidecar_path(path)
+            tmp = side + ".tmp.npz"
+            np.savez_compressed(
+                tmp,
+                qstate=np.asarray(qb.sim.state, dtype=np.complex128),
+                q_turn=np.int64(qb.turn_count),
+                q_n=np.int64(qb.n),
+                noise_weights=np.array(_j.dumps({k: float(v) for k, v in (getattr(qb, "last_noise_weights", None) or {}).items()})),
+                phase=np.asarray(pf.phase, dtype=np.complex128),
+                shadow=np.asarray(pf.shadow, dtype=np.int8),
+                p_turn=np.int64(pf.turn_count),
+                energy_hist=np.asarray(list(pf._energy_history), dtype=np.float64),
+                saved_at=np.float64(time.time()),
+            )
+            os.replace(tmp, side)
+        except Exception as e:
+            print(f"[Warning: quantum side file not saved - {e}]")
+
+    def _load_quantum_sidecar(self, path):
+        side = self._quantum_sidecar_path(path)
+        if not os.path.exists(side):
+            return False
+        try:
+            import json as _j
+            qb, pf = self.quantum_body, self.phase_field
+            with np.load(side, allow_pickle=False) as z:
+                qs = np.asarray(z["qstate"], dtype=np.complex128)
+                ph = np.asarray(z["phase"], dtype=np.complex128)
+                sh = np.asarray(z["shadow"], dtype=np.int8)
+                if qs.shape != (qb.dim,) or int(z["q_n"]) != qb.n:
+                    return False
+                if ph.shape != (pf.dim,) or sh.shape != (pf.dim,):
+                    return False
+                if not (np.all(np.isfinite(qs)) and np.all(np.isfinite(ph))):
+                    return False
+                if np.linalg.norm(qs) < 1e-9:
+                    return False
+                nw = _j.loads(str(z["noise_weights"]))
+                qt, pt = int(z["q_turn"]), int(z["p_turn"])
+                eh = [float(x) for x in z["energy_hist"]][-50:]
+            qb.sim.state = qs.astype(qb.sim.state.dtype)
+            qb._renormalize()
+            qb.turn_count = qt
+            if isinstance(nw, dict) and nw:
+                qb.last_noise_weights = {k: float(v) for k, v in nw.items()}
+            pf.phase = ph.astype(pf.phase.dtype)
+            pf.shadow = sh
+            pf.turn_count = pt
+            pf._energy_history = eh
+            return True
+        except Exception:
+            return False
 
     def load(self, path="allmynd_v1.json"):
         if not os.path.exists(path):
@@ -5039,11 +5374,26 @@ class AllMynd:
             for w1, w2s in data["bigrams"].items():
                 self.bigram_system.transitions[w1].update(w2s)
 
+        # fix_vocab_persist: rebuild learned vocabulary (it was never restored)
+        _extra = list(data.get("learned_words", []) or [])
+        _extra += [w for w in (data.get("word_strength", {}) or {}) if w not in self.word_vectors]
+        _added = 0
+        for _w in _extra[:20000]:
+            if isinstance(_w, str) and _w and _w not in self.word_vectors:
+                try:
+                    self._get_or_create_vector(_w)
+                    if _w in self.word_vectors:
+                        _added += 1
+                except Exception:
+                    pass
+        if _added:
+            print(f"  ({_added} learned words restored)")
         # Ensure vocabulary exists
         for w in self.word_vectors:
             if w not in self.word_vectors_ternary:
                 self.word_vectors_ternary[w] = word_vector_ternary(w)
 
+        self._load_quantum_sidecar(path)  # fix_quantum_persist
         print(f"\nMind loaded from {path}")
 
     # ─── Autonomous Breath ──────────────────────────────────────────
